@@ -8,7 +8,24 @@ Página com 4 módulos (Jogos, Tapete, Registo, Desempenho), atualizada automati
 2. O robô descarrega os ficheiros do football-data.co.uk, calcula os ratings das equipas e grava `dados.json` e `backtest.json`.
 3. A página (`index.html`) é publicada com esses ficheiros no GitHub Pages. Ao abrir, já está atualizada.
 
-As probabilidades (Poisson + Dixon-Coles), o EV e as classificações são calculados na página, para poderes mudar os parâmetros nas Definições (⚙) sem voltar a correr o robô.
+## Modelo (v2)
+
+- **Ratings ajustados ao adversário** (modelo de Maher/Dixon-Coles por máxima verosimilhança), com vantagem casa de cada liga, ponderação temporal (`meia_vida_dias`) e regularização (`regularizacao_k`).
+- **Remates à baliza** misturados com os golos (`peso_golos`): são mais estáveis e preveem melhor o futuro do que os golos.
+- **Prior para promovidas e despromovidas** no início de cada época.
+- **ρ de Dixon-Coles e α (peso do modelo face ao mercado) estimados automaticamente** com épocas anteriores (fora da amostra). Se o modelo não acrescentar informação, o α fica próximo de 0 e a probabilidade final aproxima-se da do mercado.
+- **Validação por liga:** a liga só é "validada" se o modelo combinado bater o mercado por mais de 2 erros-padrão, com CLV positivo e amostra suficiente.
+
+## Sinais na página
+
+| Sinal | Significado | Stake sugerido |
+|---|---|---|
+| **Valor de preço** | A tua odd está acima do preço justo da Pinnacle/Betfair (sem margem). Sinal mais robusto. | Kelly fracionado |
+| **Valor do modelo** | O modelo vê valor **e** a liga está validada. | Kelly fracionado |
+| **A observar** | O modelo vê valor mas a liga não está validada. | 0 (só registo) |
+| **Rever** | O modelo diverge muito do mercado: falta informação (lesões, rotação). | 0 |
+
+O "valor de preço" depende da **odd real da tua casa**: introduz-a no detalhe do jogo ("A minha odd").
 
 ## Configuração inicial (uma vez)
 

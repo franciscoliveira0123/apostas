@@ -63,7 +63,8 @@ h2.day{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--
 .lg{font-family:var(--mono);font-size:11px;background:var(--neu-bg);border-radius:4px;padding:1px 5px;color:var(--txt2)}
 .teams{font-weight:600;font-size:15px;grid-column:1/2}
 .pill{font-size:11.5px;font-weight:600;border-radius:999px;padding:2px 9px;white-space:nowrap;align-self:start}
-.p-int{background:var(--ok-bg);color:var(--ok)}.p-obs{background:var(--warn-bg);color:var(--warn)}
+.p-int{background:var(--ok-bg);color:var(--ok)}.p-preco{background:var(--ok);color:var(--card)}
+.tagp{display:inline-block;font-size:10.5px;font-weight:700;color:var(--ok);margin-top:1px}.p-obs{background:var(--warn-bg);color:var(--warn)}
 .p-rev,.p-nv{background:var(--bad-bg);color:var(--bad)}.p-sem,.p-so{background:var(--neu-bg);color:var(--txt2)}
 .mk{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--line)}
 .mk>div{padding:6px 4px 7px;text-align:center;border-right:1px solid var(--line);position:relative}
@@ -193,13 +194,13 @@ table.t th{font-size:11.5px;color:var(--txt3);font-weight:600}
 /* ============================================================ estado */
 const MK = ["1","X","2","+2,5","−2,5"];
 const MKF = ["Vitória casa","Empate","Vitória fora","Mais 2,5 golos","Menos 2,5 golos"];
-const DEF = {banca:100,fracKelly:0.25,stakeMax:0.02,rho:-0.10,alfa:0.5,evMin:0.02,evForte:0.05,oddMax:4,minJogos:6,divMax:0.15,erro:0.02,ref:"avg",mk:[true,true,true,true,true]};
+const DEF = {banca:100,fracKelly:0.25,stakeMax:0.02,evPreco:0.02,evMin:0.03,evForte:0.05,oddMax:4,minJogos:6,divMax:0.12,erro:0.02,ref:"avg",mk:[true,true,true,true,true]};
 const S = {dados:null, bt:null, btRho:null, btCache:null, view:"jogos", f:{q:"",liga:"",dia:"",val:false}, regF:"todas", btF:{liga:"",ep:""}};
 const LS = {
   get(k,d){try{const v=localStorage.getItem("ap_"+k);return v?JSON.parse(v):d}catch(e){return d}},
   set(k,v){try{localStorage.setItem("ap_"+k,JSON.stringify(v))}catch(e){}}
 };
-let CFG = Object.assign({}, DEF, LS.get("cfg", {}));
+let CFG = Object.assign({}, DEF, LS.get("cfg", {})); delete CFG.alfa; delete CFG.rho; if(!LS.get("v2",false)){CFG.evMin=DEF.evMin;CFG.divMax=DEF.divMax;LS.set("v2",true)}
 let TAP = LS.get("tapete", []);          // [{id, m}]
 let MINE = LS.get("odds", {});           // {id: [5]}
 let REG = LS.get("registo", []);         // apostas
@@ -246,52 +247,66 @@ function fair(od){ // [o1,oX,o2,oO,oU] -> [p1,pX,p2,pO,pU]
   if(od && isN(od[3])&&od[3]>1&&isN(od[4])&&od[4]>1){const s=1/od[3]+1/od[4];r[3]=(1/od[3])/s;r[4]=1-r[3]}
   return r;
 }
-function classe(c){
-  const m={int:"Interessante",obs:"A observar",sem:"Sem vantagem",rev:"Rever",nv:"Não validado",so:"Sem odds"};
-  return `<span class="pill p-${c}" title="${esc(c==="rev"?"O modelo diverge muito do mercado: provável informação em falta (lesões, rotação, motivação).":c==="nv"?"Poucos jogos de histórico ou equipas de ligas diferentes.":"")}">${m[c]}</span>`;
-}
-/* jogo normalizado: {id, div, divF, data, hora, casa, fora, lh, la, nmin, ref[5], merc[5], manual, comp} */
+const LBL={preco:"Valor de preço",int:"Valor do modelo",obs:"A observar",sem:"Sem vantagem",rev:"Rever",nv:"Não validado",so:"Sem odds"};
+const TIP={preco:"A odd está acima do preço justo do mercado de referência (Pinnacle ou Betfair, sem margem). É o sinal mais robusto.",
+  int:"O modelo vê valor e esta liga passou a validação estatística (melhor do que o mercado e CLV positivo).",
+  obs:"O modelo vê valor, mas ainda não demonstrou vantagem nesta liga: registar só com stake 0.",
+  rev:"O modelo diverge muito do mercado: provável informação em falta (lesões, rotação, motivação).",
+  nv:"Poucos jogos de histórico ou equipas de ligas diferentes.",so:"Sem odds para comparar.",sem:"Nem o preço nem o modelo mostram vantagem."};
+function classe(c){return `<span class="pill p-${c}" title="${esc(TIP[c]||"")}">${LBL[c]}</span>`}
+const PRI={preco:3,int:2,obs:1};
+const par = () => (S.dados&&S.dados.parametros)||{rho:-0.08,alfa1x2:0.3,alfaGolos:0.3};
+const valLiga = div => (S.dados&&S.dados.validacao&&S.dados.validacao[div])||null;
+const ligaValidada = div => {const v=valLiga(div); return !!(v&&v.validada)};
+/* jogo normalizado: {id, div, divF, data, hora, casa, fora, lh, la, nmin, pm[5], pf[5], pk[5], sharp, ref[5], manual, comp} */
 function todosJogos(){
-  const out=[];
+  const out=[], P=par();
+  const hj=hojeISO(), agora=new Date().toTimeString().slice(0,5);
   if(S.dados) for(const j of S.dados.jogos){
-    const m = j.merc||[]; const mp=[m[0],m[1],m[2],m[3],isN(m[3])?1-m[3]:null];
-    out.push({id:j.id,div:j.div,divF:j.div,data:j.data,hora:j.hora,casa:j.casa,fora:j.fora,lh:j.lh,la:j.la,nmin:Math.min(j.nH||0,j.nA||0),
-      ref:(j.odds&&j.odds[CFG.ref])||[], alt:j.odds, merc:mp, fonte:j.fonteMerc, manual:false, comp:nomeLiga(j.div)});
+    if(j.data<hj || (j.data===hj && j.hora && j.hora<=agora)) continue; // jogo já começou
+    out.push({id:j.id,div:j.div,divF:j.div,data:j.data,hora:j.hora,casa:j.casa,fora:j.fora,lh:j.lh,la:j.la,nmin:j.nmin||0,
+      pm:j.pm, pf:j.pf||j.pk, pk:j.pk||[null,null,null,null,null], fonte:j.fonte, sharp:j.fonte==="PS"||j.fonte==="BFE",
+      ref:(j.odds&&j.odds[CFG.ref])||[], max:(j.odds&&j.odds.max)||[], manual:false, comp:nomeLiga(j.div)});
   }
   for(const g of MAN){
-    if(g.data < hojeISO()) continue;
-    const R=S.dados&&S.dados.ratings; let lh=null,la=null,nmin=0;
+    if(g.data < hj) continue;
+    const R=S.dados&&S.dados.ratings; let lh=null,la=null,nmin=0,pm=null;
     if(R && g.div===g.divF && R[g.div]){
       const L=R[g.div], a=L.equipas[g.casa], b=L.equipas[g.fora];
-      if(a&&b){lh=L.muH*a[0]*b[1];la=L.muA*b[0]*a[1];nmin=Math.min(a[2],b[2])}
+      if(a&&b){lh=L.muH*a[0]*b[1];la=L.muA*b[0]*a[1];nmin=Math.min(a[2],b[2]);pm=dc(lh,la,P.rho).p}
     }
-    out.push({id:g.id,div:g.div,divF:g.divF,data:g.data,hora:g.hora||"",casa:g.casa,fora:g.fora,lh,la,nmin,ref:g.odds||[],merc:fair(g.odds),fonte:"tuas odds",manual:true,comp:g.comp||"Manual"});
+    const pk=fair(g.odds);
+    const pf=pm?pm.map((v,i)=>{const a=i<3?P.alfa1x2:P.alfaGolos;return isN(pk[i])?a*v+(1-a)*pk[i]:v}):pk;
+    if(pm&&!(isN(pk[0])&&isN(pk[1])&&isN(pk[2]))) for(let i=0;i<3;i++) pf[i]=pm[i];
+    out.push({id:g.id,div:g.div,divF:g.divF,data:g.data,hora:g.hora||"",casa:g.casa,fora:g.fora,lh,la,nmin,pm,pf,pk,fonte:"tuas odds",sharp:false,
+      ref:g.odds||[],max:[],manual:true,comp:g.comp||"Manual"});
   }
   out.sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora)||a.div.localeCompare(b.div));
   return out;
 }
 function calc(g){
-  const pm = isN(g.lh)&&isN(g.la) ? dc(g.lh,g.la,CFG.rho) : null;
   const mine = MINE[g.id]||[];
   const odds = [0,1,2,3,4].map(i => isN(mine[i])&&mine[i]>1 ? mine[i] : (isN(g.ref[i])&&g.ref[i]>1 ? g.ref[i] : null));
-  const p = [0,1,2,3,4].map(i => pm ? (isN(g.merc[i]) ? CFG.alfa*pm.p[i]+(1-CFG.alfa)*g.merc[i] : pm.p[i]) : null);
+  const p = [0,1,2,3,4].map(i => g.pf&&isN(g.pf[i]) ? g.pf[i] : null);
   const ev = [0,1,2,3,4].map(i => isN(p[i])&&isN(odds[i]) ? p[i]*odds[i]-1 : null);
-  const mc = [0,1,2,3,4].map(i => legClass(g, pm, odds, ev, i));
-  let bi=-1; [0,1,2,3,4].forEach(i=>{ if(CFG.mk[i] && isN(ev[i]) && odds[i]<=CFG.oddMax && (bi<0 || ev[i]>ev[bi])) bi=i });
+  const evp = [0,1,2,3,4].map(i => g.sharp&&isN(g.pk[i])&&isN(odds[i]) ? g.pk[i]*odds[i]-1 : null);
+  const mc = [0,1,2,3,4].map(i => legClass(g, odds, ev, evp, i));
+  let bi=-1, bs=-1e9;
+  for(let i=0;i<5;i++){ if(!CFG.mk[i]||!PRI[mc[i]]) continue; const sc=PRI[mc[i]]*100+(mc[i]==="preco"?evp[i]:ev[i]); if(sc>bs){bs=sc;bi=i} }
   let c;
-  if(!pm || g.nmin < CFG.minJogos) c="nv";
-  else if(!ev.some(isN)) c="so";
-  else if(bi<0) c="sem";
-  else c=mc[bi];
-  const stake = (c==="int"||c==="obs") ? kelly(p[bi],odds[bi]) : 0;
-  return {pm, p, odds, ev, bi, c, mc, stake, mine};
+  if(bi>=0) c=mc[bi];
+  else if(!odds.some(isN)) c="so";
+  else if(!g.pm || g.nmin < CFG.minJogos) c="nv";
+  else { let j=-1; for(let i=0;i<5;i++) if(CFG.mk[i]&&isN(ev[i])&&odds[i]<=CFG.oddMax&&(j<0||ev[i]>ev[j])) j=i; c=(j>=0&&mc[j]==="rev")?"rev":"sem"; }
+  const stake = c==="preco" ? kelly(g.pk[bi],odds[bi]) : c==="int" ? kelly(p[bi],odds[bi]) : 0;
+  return {pm:g.pm, p, odds, ev, evp, bi, c, mc, stake, mine};
 }
-function legClass(g, pm, odds, ev, i){
-  if(!pm || g.nmin < CFG.minJogos) return "nv";
-  if(!isN(ev[i])) return "so";
-  if(isN(g.merc[i]) && Math.abs(pm.p[i]-g.merc[i]) > CFG.divMax) return "rev";
-  if(ev[i]>=CFG.evForte && odds[i]<=CFG.oddMax) return "int";
-  if(ev[i]>=CFG.evMin && odds[i]<=CFG.oddMax) return "obs";
+function legClass(g, odds, ev, evp, i){
+  if(!isN(odds[i])) return "so";
+  if(isN(evp[i]) && evp[i]>=CFG.evPreco && odds[i]<=CFG.oddMax) return "preco";
+  if(!g.pm || g.nmin < CFG.minJogos) return "nv";
+  if(isN(g.pk[i]) && Math.abs(g.pm[i]-g.pk[i]) > CFG.divMax) return "rev";
+  if(isN(ev[i]) && ev[i]>=CFG.evMin && odds[i]<=CFG.oddMax) return (ligaValidada(g.div) && ev[i]>=CFG.evForte) ? "int" : "obs";
   return "sem";
 }
 function kelly(p,o){ if(!isN(p)||!isN(o)||o<=1) return 0; const f=Math.max(0,Math.min(CFG.stakeMax, CFG.fracKelly*(p*o-1)/(o-1))); return f*CFG.banca }
@@ -305,8 +320,8 @@ function rJogos(){
   const ligas=[...new Set(all.map(x=>x.g.div))].sort();
   if(S.f.dia && !dias.includes(S.f.dia)) S.f.dia="";
   const q=S.f.q.trim().toLowerCase();
-  const vis=all.filter(({g,r})=>(!S.f.liga||g.div===S.f.liga)&&(!S.f.dia||g.data===S.f.dia)&&(!S.f.val||r.c==="int"||r.c==="obs")&&(!q||(g.casa+" "+g.fora+" "+g.comp).toLowerCase().includes(q)));
-  const nI=vis.filter(x=>x.r.c==="int").length, nO=vis.filter(x=>x.r.c==="obs").length;
+  const vis=all.filter(({g,r})=>(!S.f.liga||g.div===S.f.liga)&&(!S.f.dia||g.data===S.f.dia)&&(!S.f.val||PRI[r.c])&&(!q||(g.casa+" "+g.fora+" "+g.comp).toLowerCase().includes(q)));
+  const nP=vis.filter(x=>x.r.c==="preco").length, nI=vis.filter(x=>x.r.c==="int").length, nO=vis.filter(x=>x.r.c==="obs").length;
   const est=S.dados.estado||{}; const av=(est.avisos||[]).slice();
   if(!S.dados.jogos.length) av.push("A fonte ainda não publicou os próximos jogos (o ficheiro costuma sair perto da jornada). Volta a abrir mais tarde ou carrega em Atualizar.");
   let h=`<div class="bar">
@@ -314,11 +329,11 @@ function rJogos(){
     <select class="inp" id="fl" aria-label="Liga"><option value="">Todas as ligas</option>${ligas.map(l=>`<option value="${esc(l)}" ${l===S.f.liga?"selected":""}>${esc(l)} · ${esc(nomeLiga(l))}</option>`).join("")}</select>
     <button class="btn sm" id="addMan">+ Jogo manual</button></div>
   <div class="chips" role="group" aria-label="Filtros">
-    <button class="chip ${S.f.val?"on":""}" data-val="1">Só com valor</button>
+    <button class="chip ${S.f.val?"on":""}" data-val="1">Só com sinal</button>
     <button class="chip ${!S.f.dia?"on":""}" data-dia="">Todos os dias</button>
     ${dias.map(d=>`<button class="chip ${d===S.f.dia?"on":""}" data-dia="${d}">${dlab(d)}</button>`).join("")}
   </div>
-  <div class="sum num">${vis.length} jogos · <span class="evp">${nI} interessantes</span> · ${nO} a observar</div>
+  <div class="sum num">${vis.length} jogos · <span class="evp">${nP} valor de preço</span> · <span class="evp">${nI} valor do modelo</span> · ${nO} a observar</div>
   ${av.map(a=>`<div class="warnbox">${esc(a)}</div>`).join("")}`;
   if(!vis.length) h+=`<div class="empty"><b>Nenhum jogo</b>${all.length?"Nenhum jogo corresponde aos filtros.":"Ainda não há próximos jogos nos dados."}</div>`;
   let cur="";
@@ -330,15 +345,16 @@ function rJogos(){
 }
 function card(g,r){
   const open=S.open===g.id;
-  const cells=[0,1,2,3,4].map(i=>`<div class="${i===r.bi&&(r.c==="int"||r.c==="obs")?"best":""} ${CFG.mk[i]?"":"off"}">
+  const cells=[0,1,2,3,4].map(i=>`<div class="${i===r.bi?"best":""} ${CFG.mk[i]?"":"off"}">
       <div class="l">${MK[i]}</div><div class="pp num">${pct(r.p[i],0)}</div><div class="o num">${f2(r.odds[i])}</div>
-      <div class="ev num ${isN(r.ev[i])&&r.ev[i]>0?"evp":"evn"}">${sgn(r.ev[i],0)}</div></div>`).join("");
+      <div class="ev num ${isN(r.ev[i])&&r.ev[i]>0?"evp":"evn"}">${sgn(r.ev[i],0)}</div>
+      ${r.mc[i]==="preco"?`<div class="tagp num">preço ${sgn(r.evp[i],0)}</div>`:""}</div>`).join("");
   return `<div class="card game ${open?"open":""}" data-id="${esc(g.id)}">
     <div class="gtop" data-tg="${esc(g.id)}">
       <div class="gmeta"><span class="lg">${esc(g.manual?"MAN":g.div)}</span><span class="num">${esc(g.hora)}</span><span>${esc(g.comp)}</span></div>
       ${classe(r.c)}
       <div class="teams">${esc(g.casa)} <span style="color:var(--txt3);font-weight:400">vs</span> ${esc(g.fora)}</div>
-      <div class="num" style="font-size:12.5px;color:var(--txt2);text-align:right">${r.c==="int"||r.c==="obs"?`${MK[r.bi]} · ${eur(r.stake)}`:""}</div>
+      <div class="num" style="font-size:12.5px;color:var(--txt2);text-align:right">${r.bi>=0?`${MK[r.bi]}${r.stake>0?" · "+eur(r.stake):" · stake 0"}`:""}</div>
     </div>
     <div class="mk">${cells}</div>
     ${open?detalhe(g,r):'<div class="det"></div>'}
@@ -346,19 +362,26 @@ function card(g,r){
 }
 function detalhe(g,r){
   const inTap=i=>TAP.some(t=>t.id===g.id&&t.m===i);
-  const rows=[0,1,2,3,4].map(i=>{const fj=f2(isN(r.p[i])&&r.p[i]>0?1/r.p[i]:null);return `<tr><td><span class="hide-s">${MKF[i]}</span><b class="show-s">${MK[i]}</b></td><td class="num hide-s">${pct(r.pm?r.pm.p[i]:null)}</td><td class="num hide-s">${pct(g.merc[i])}</td>
-     <td class="num"><b>${pct(r.p[i])}</b><div class="show-s sub">mod. ${pct(r.pm?r.pm.p[i]:null,0)} · merc. ${pct(g.merc[i],0)} · justa ${fj}</div></td>
-     <td class="num hide-s">${fj}</td>
+  const pm=g.pm||[];
+  const rows=[0,1,2,3,4].map(i=>{const fj=f2(isN(r.p[i])&&r.p[i]>0?1/r.p[i]:null);return `<tr><td><span class="hide-s">${MKF[i]}</span><b class="show-s">${MK[i]}</b></td>
+     <td class="num hide-s">${pct(pm[i])}</td><td class="num hide-s">${pct(g.pk[i])}</td>
+     <td class="num"><b>${pct(r.p[i])}</b><div class="show-s sub">mod. ${pct(pm[i],0)} · merc. ${pct(g.pk[i],0)} · justa ${fj}${isN(g.max[i])?" · máx. "+f2(g.max[i]):""}${isN(r.evp[i])?" · vs merc. "+sgn(r.evp[i],0):""}</div></td>
+     <td class="num hide-s">${fj}</td><td class="num hide-s">${f2(g.max[i])}</td>
      <td><input class="mo num" inputmode="decimal" data-mo="${i}" value="${isN(r.mine[i])?fi(r.mine[i]):""}" placeholder="${f2(g.ref[i])}" aria-label="A minha odd ${MK[i]}"></td>
      <td class="num ${isN(r.ev[i])&&r.ev[i]>0?"evp":"evn"}">${sgn(r.ev[i])}</td>
+     <td class="num hide-s ${isN(r.evp[i])&&r.evp[i]>=CFG.evPreco?"evp":"evn"}">${sgn(r.evp[i])}</td>
      <td><button class="tbtn ${inTap(i)?"on":""}" data-tap="${i}" aria-label="${inTap(i)?"Retirar do tapete":"Adicionar ao tapete"}">${inTap(i)?'<span class="hide-s">No tapete</span><span class="show-s">✓</span>':'<span class="hide-s">+ Tapete</span><span class="show-s">+</span>'}</button></td></tr>`}).join("");
-  const alt=g.alt?`<div class="note">Odds de referência: ${CFG.ref==="avg"?"média de mercado":CFG.ref==="b365"?"Bet365":"máxima de mercado"}. Mercado sem margem: ${esc(g.fonte==="BFE"?"Betfair Exchange":g.fonte==="PS"?"Pinnacle":g.fonte==="Avg"?"média":g.fonte||"–")}.</div>`:`<div class="note">Jogo manual: o mercado é calculado a partir das odds que introduziste.</div>`;
+  const fonte=g.fonte==="PS"?"Pinnacle":g.fonte==="BFE"?"Betfair Exchange":g.fonte==="Avg"?"média de mercado (não é um preço de referência fiável: sinal de preço desligado)":g.fonte;
+  const v=valLiga(g.div);
+  const vtxt=v?`Validação da liga (épocas anteriores, fora da amostra): ganho de log-loss vs mercado ${f2(v.ganhoLL,4)} ± ${f2(2*v.ganhoLLse,4)} · CLV da estratégia do modelo ${sgn(v.A&&v.A.clv)} (${v.A?v.A.n:0} apostas) · <b class="${v.validada?"evp":"res-l"}">${v.validada?"validada":"não validada"}</b>`:"Sem validação para esta liga.";
+  const top=isN(g.lh)&&isN(g.la)?dc(g.lh,g.la,par().rho).top:null;
   return `<div class="det">
     <div class="kv num"><span>λ casa <b>${f2(g.lh)}</b></span><span>λ fora <b>${f2(g.la)}</b></span><span>Jogos de histórico (mín.) <b>${g.nmin}</b></span>${g.manual&&g.div!==g.divF?`<span style="color:var(--bad)">Equipas de ligas diferentes: sem modelo</span>`:""}</div>
-    <div style="overflow-x:auto"><table class="t"><thead><tr><th><span class="hide-s">Mercado</span></th><th class="hide-s">Modelo</th><th class="hide-s">Mercado</th><th>Final</th><th class="hide-s">Odd justa</th><th>A minha odd</th><th>EV</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    ${alt}
+    <div style="overflow-x:auto"><table class="t"><thead><tr><th><span class="hide-s">Mercado</span></th><th class="hide-s">Modelo</th><th class="hide-s">Mercado justo</th><th>Final</th><th class="hide-s">Odd justa</th><th class="hide-s">Máx.</th><th>A minha odd</th><th>EV</th><th class="hide-s">vs mercado</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="note">Mercado justo: ${esc(fonte)}. “vs mercado” = a tua odd face ao preço justo — positivo é valor de preço. ${g.manual?"":`Odds de referência: ${CFG.ref==="avg"?"média":CFG.ref==="b365"?"Bet365":"máxima"}; introduz a odd real da tua casa.`}</p>
+    <p class="note">${vtxt}</p>
     <div class="dgrid" style="margin-top:12px">
-      <div><div class="fl">Resultados mais prováveis (modelo)</div><div class="scores num">${r.pm?r.pm.top.map(s=>`<span>${s[0]}-${s[1]} · ${pct(s[2],0)}</span>`).join(""):"–"}</div></div>
+      <div><div class="fl">Resultados mais prováveis (modelo)</div><div class="scores num">${top?top.map(s=>`<span>${s[0]}-${s[1]} · ${pct(s[2],0)}</span>`).join(""):"–"}</div></div>
       <div style="display:flex;gap:8px;align-items:flex-end;justify-content:flex-end;flex-wrap:wrap">
         ${g.manual?`<button class="btn sm danger" data-delman="${esc(g.id)}">Apagar jogo</button>`:""}
         <button class="btn sm" data-clrodds>Limpar as minhas odds</button>
@@ -397,11 +420,12 @@ function bindJogos(){
     if(t.dataset.delman){MAN=MAN.filter(x=>x.id!==t.dataset.delman);TAP=TAP.filter(x=>x.id!==t.dataset.delman);save();S.open=null;rJogos();rTapete();badges();return}
     if(t.dataset.simples!==undefined){
       const g=todosJogos().find(x=>x.id===id), r=calc(g);
+      if(r.bi<0) return;
       abrirRegisto([perna(g,r,r.bi)], r.stake, "Simples");
     }
   });
 }
-function perna(g,r,m){return {id:g.id,div:g.div,data:g.data,casa:g.casa,fora:g.fora,comp:g.comp,m,odd:r.odds[m],p:r.p[m],pm:r.pm?r.pm.p[m]:null,pk:g.merc[m],auto:!g.manual,res:null,man:null}}
+function perna(g,r,m){return {id:g.id,div:g.div,data:g.data,casa:g.casa,fora:g.fora,comp:g.comp,m,odd:r.odds[m],p:r.p[m],pm:g.pm?g.pm[m]:null,pk:g.pk[m],sinal:r.mc[m],auto:!g.manual,res:null,man:null}}
 
 /* jogo manual */
 function abrirManual(){
@@ -641,89 +665,99 @@ async function carregarBT(){ if(!S.bt){const r=await fetch("backtest.json",{cach
 function rBT(){
   const box=$("#btBox"); if(!box||!S.bt) return;
   const C=S.bt.campos, ix=Object.fromEntries(C.map((c,i)=>[c,i])), L=S.bt.linhas;
+  const g4=(r,p)=>[r[ix[p+"1"]],r[ix[p+"X"]],r[ix[p+"2"]],r[ix[p+"O"]]];
+  const c5=q=>[q[0],q[1],q[2],q[3],isN(q[3])?1-q[3]:null];
   const ligas=[...new Set(L.map(r=>r[0]))].sort(), eps=[...new Set(L.map(r=>r[1]))].sort().reverse();
-  if(S.btRho!==CFG.rho){S.btCache=L.map(r=>dc(r[ix.lh],r[ix.la],CFG.rho).p);S.btRho=CFG.rho}
-  let n=0,nc=0,bM=0,bC=0,bK=0,bF=0,gM=0,gC=0,gF=0,nb=0,won=0,pl=0,so=0,cl=[],acc=[],cal=Array.from({length:10},()=>[0,0,0]);
-  L.forEach((r,k)=>{
-    if((S.btF.liga&&r[0]!==S.btF.liga)||(S.btF.ep&&r[1]!==S.btF.ep)) return;
-    if(r[ix.nmin]<CFG.minJogos) return;
-    n++;
-    const pm=S.btCache[k], gc=r[ix.gc], gf=r[ix.gf], t=gc+gf;
-    const y=[gc>gf,gc===gf,gc<gf,t>2,t<3].map(Number);
-    const mk=[r[ix.m1],r[ix.mX],r[ix.m2],r[ix.mO],isN(r[ix.mO])?1-r[ix.mO]:null];
-    const fc=[r[ix.f1],r[ix.fX],r[ix.f2],r[ix.fO],isN(r[ix.fO])?1-r[ix.fO]:null];
-    const p=pm.map((v,i)=>isN(mk[i])?CFG.alfa*v+(1-CFG.alfa)*mk[i]:v);
-    const b=pm[0]; const bin=Math.min(9,Math.floor(b*10)); cal[bin][0]++;cal[bin][1]+=b;cal[bin][2]+=y[0];
-    if([0,1,2,3].every(i=>isN(mk[i])&&isN(fc[i]))){
-      nc++; const br=q=>(q[0]-y[0])**2+(q[1]-y[1])**2+(q[2]-y[2])**2;
-      bM+=br(pm);bC+=br(p);bK+=br(mk);bF+=br(fc);gM+=2*(pm[3]-y[3])**2;gC+=2*(p[3]-y[3])**2;gF+=2*(fc[3]-y[3])**2;
+  const est=S.btF.est||"A";
+  let n=0,lM=0,lF=0,lK=0,lC=0,gM=0,gF=0,gC=0,ng=0,sd=0,sd2=0,nb=0,won=0,pl=0,so=0,cl=[],acc=[];
+  const cal=Array.from({length:10},()=>[0,0,0]);
+  for(const r of L){
+    if((S.btF.liga&&r[0]!==S.btF.liga)||(S.btF.ep&&r[1]!==S.btF.ep)) continue;
+    const gc=r[ix.gc], gf=r[ix.gf], t=gc+gf, k1=gc>gf?0:gc===gf?1:2;
+    const y=[k1===0,k1===1,k1===2,t>2,t<3];
+    const pm=g4(r,"pm"), pf=g4(r,"pf"), mk=g4(r,"mk"), fc=g4(r,"fc");
+    const okM=r[ix.nmin]>=CFG.minJogos;
+    if(okM && [0,1,2].every(i=>isN(mk[i])&&isN(fc[i]))){
+      n++; lM-=Math.log(pm[k1]); lF-=Math.log(pf[k1]); lK-=Math.log(mk[k1]); lC-=Math.log(fc[k1]);
+      const d=Math.log(mk[k1])-Math.log(pf[k1]); sd+=d; sd2+=d*d;
+      const b=Math.min(9,Math.floor(pm[0]*10)); cal[b][0]++; cal[b][1]+=pm[0]; cal[b][2]+=y[0]?1:0;
+      if(isN(mk[3])&&isN(fc[3])){ng++; const lo=q=>-Math.log(t>2?q[3]:1-q[3]); gM+=lo(pm); gF+=lo(pf); gC+=lo(fc)}
     }
-    const od=[r[ix.o1],r[ix.oX],r[ix.o2],r[ix.oO],r[ix.oU]];
-    let bi=-1,be=-9; for(let i=0;i<5;i++) if(CFG.mk[i]&&isN(od[i])&&od[i]>1&&od[i]<=CFG.oddMax){const e=p[i]*od[i]-1;if(e>be){be=e;bi=i}}
-    if(bi>=0&&be>=CFG.evMin){
-      nb++; so+=od[bi]; const w=y[bi]; won+=w; pl+=w?od[bi]-1:-1; acc.push(pl);
-      if(isN(fc[bi])) cl.push(od[bi]*fc[bi]-1);
+    const F5=c5(fc);
+    let od, P5, lim, ok;
+    if(est==="A"){od=[r[ix.a1],r[ix.aX],r[ix.a2],r[ix.aO],r[ix.aU]]; P5=c5(pf); lim=CFG.evMin; ok=okM}
+    else {od=[r[ix.x1],r[ix.xX],r[ix.x2],r[ix.xO],r[ix.xU]]; P5=c5(mk); lim=CFG.evPreco; ok=r[ix.sharp]===1}
+    if(!ok) continue;
+    let bi=-1,be=-9; for(let i=0;i<5;i++) if(CFG.mk[i]&&isN(od[i])&&od[i]>1&&od[i]<=CFG.oddMax&&isN(P5[i])){const e=P5[i]*od[i]-1;if(e>be){be=e;bi=i}}
+    if(bi>=0&&be>=lim){
+      nb++; so+=od[bi]; const w=y[bi]?1:0; won+=w; pl+=w?od[bi]-1:-1; acc.push(pl);
+      if(isN(F5[bi])) cl.push(od[bi]*F5[bi]-1);
     }
-  });
+  }
   const roi=nb?pl/nb:null, se=nb>1?Math.sqrt(Math.max(0,so/nb-1))/Math.sqrt(nb):null;
   const avg=a=>a.length?a.reduce((p,q)=>p+q,0)/a.length:null, cm=avg(cl);
+  const md=n?sd/n:0, mse=n>1?Math.sqrt(Math.max(0,sd2/n-md*md)/n):0, ganho=-md;
   let l1;
-  if(nc<100) l1="Amostra pequena (menos de 100 jogos comparáveis): conclusões não fiáveis.";
-  else if(bC/nc<bF/nc) l1="O modelo final bate o mercado de fecho em Brier — invulgar; confirmar noutras épocas e ligas antes de acreditar.";
-  else if(bC/nc<bK/nc) l1="Melhor do que o mercado de abertura, pior do que o de fecho: o mercado incorpora informação que o modelo não tem. Seguir o CLV.";
-  else l1="Pior do que o mercado de abertura: o modelo ainda não acrescenta informação. Rever ρ e α nas definições (meia-vida e K no config.json).";
+  if(n<300) l1="Amostra pequena (menos de 300 jogos comparáveis): conclusões não fiáveis.";
+  else if(ganho>2*mse) l1="O modelo combinado prevê melhor do que o mercado de abertura, com significância estatística. Confirmar com CLV positivo antes de confiar.";
+  else if(ganho>-2*mse) l1="O modelo combinado não se distingue do mercado (a diferença está dentro de 2 erros-padrão): o α estimado é baixo e o modelo pouco acrescenta. A vantagem, se existir, vem do preço.";
+  else l1="O modelo combinado prevê pior do que o mercado de abertura.";
   let l2;
-  if(nb<30) l2="Poucas apostas simuladas para avaliar o ROI.";
-  else if(Math.abs(roi)<2*se) l2="ROI dentro de ±2 erros-padrão de zero: não distinguível do acaso.";
-  else if(roi>0) l2="ROI positivo acima de 2 erros-padrão — validar noutra época antes de confiar (risco de sobreajuste aos parâmetros).";
-  else l2="ROI negativo de forma significativa.";
+  if(nb<50) l2="Poucas apostas simuladas para avaliar o ROI.";
+  else if(isN(cm)&&cm>0&&roi>-2*se) l2=`CLV positivo (${sgn(cm)}): as apostas batem o preço de fecho — é o sinal de vantagem mais fiável. ${Math.abs(roi)<2*se?"O ROI ainda está dentro do ruído.":"ROI coerente."}`;
+  else if(Math.abs(roi)<2*se) l2="ROI dentro de ±2 erros-padrão de zero e CLV não positivo: sem vantagem demonstrada.";
+  else if(roi>0) l2="ROI positivo e significativo, mas com CLV não positivo: provável sorte ou sobreajuste.";
+  else l2="ROI negativo de forma significativa: esta estratégia perde dinheiro.";
   const k=(t,v)=>`<div class="card kpi"><div class="k">${t}</div><div class="v num">${v}</div></div>`;
-  const b3=x=>nc?f2(x/nc,3):"–";
-  box.innerHTML=`<div class="bar"><select class="inp" id="btL"><option value="">Todas as ligas</option>${ligas.map(l=>`<option value="${l}" ${l===S.btF.liga?"selected":""}>${l} · ${esc(nomeLiga(l))}</option>`).join("")}</select>
+  const f4=(x,m)=>m?f2(x/m,4):"–";
+  const V=(S.dados&&S.dados.validacao)||{}, P=par();
+  const vr=Object.keys(V).sort((a,b)=>(a==="TOTAL")-(b==="TOTAL")||a.localeCompare(b)).map(c=>{const v=V[c];return [c==="TOTAL"?"<b>Total</b>":esc(c+" · "+nomeLiga(c)),v.n,`${f2(v.ganhoLL,4)} ± ${f2(2*v.ganhoLLse,4)}`,`${sgn(v.A.roi)} / ${sgn(v.A.clv)} (${v.A.n})`,`${sgn(v.B.roi)} / ${sgn(v.B.clv)} (${v.B.n})`,v.validada?'<span class="evp">Sim</span>':"Não"]});
+  box.innerHTML=`<div class="bar"><select class="inp" id="btS"><option value="A" ${est==="A"?"selected":""}>A — Modelo combinado vs odd média</option><option value="B" ${est==="B"?"selected":""}>B — Melhor odd vs Pinnacle (preço)</option></select>
+    <select class="inp" id="btL"><option value="">Todas as ligas</option>${ligas.map(l=>`<option value="${l}" ${l===S.btF.liga?"selected":""}>${l} · ${esc(nomeLiga(l))}</option>`).join("")}</select>
     <select class="inp" id="btE"><option value="">Todas as épocas</option>${eps.map(e=>`<option value="${e}" ${e===S.btF.ep?"selected":""}>20${e.slice(0,2)}/${e.slice(2)}</option>`).join("")}</select></div>
-    <div class="kpis">${k("Jogos avaliados",n)}${k("Apostas simuladas",nb)}${k("Taxa de acerto",nb?pct(won/nb):"–")}${k("Odd média",nb?f2(so/nb):"–")}
-      ${k("ROI (1 unidade)",`<span class="${roi>0?"evp":roi<0?"res-l":""}">${sgn(roi)}</span>`)}${k("± 2 erros-padrão",se?"±"+pct(2*se):"–")}${k("CLV médio",sgn(cm))}${k("% CLV > 0",cl.length?pct(cl.filter(c=>c>0).length/cl.length,0):"–")}</div>
-    <div class="diag ${nc>=100&&bC<bK?"d-ok":"d-warn"}" style="margin:0 0 6px">${esc(l1)}</div>
-    <div class="diag ${nb>=30&&roi>0&&Math.abs(roi)>=2*se?"d-ok":"d-warn"}" style="margin:0 0 12px">${esc(l2)}</div>
+    <div class="kpis">${k("Jogos comparáveis",n)}${k("Apostas simuladas",nb)}${k("Taxa de acerto",nb?pct(won/nb):"–")}${k("Odd média",nb?f2(so/nb):"–")}
+      ${k("ROI (1 unidade)",`<span class="${roi>0?"evp":roi<0?"res-l":""}">${sgn(roi)}</span>`)}${k("± 2 erros-padrão",se?"±"+pct(2*se):"–")}${k("CLV médio",`<span class="${cm>0?"evp":cm<0?"res-l":""}">${sgn(cm)}</span>`)}${k("% CLV > 0",cl.length?pct(cl.filter(c=>c>0).length/cl.length,0):"–")}</div>
+    <div class="diag ${n>=300&&ganho>2*mse?"d-ok":"d-warn"}" style="margin:0 0 6px">${esc(l1)}</div>
+    <div class="diag ${nb>=50&&isN(cm)&&cm>0?"d-ok":nb>=50&&roi<0&&Math.abs(roi)>=2*se?"d-bad":"d-warn"}" style="margin:0 0 12px">${esc(l2)}</div>
     <div class="tables">
-      <div class="card"><h3>Brier (menor = melhor) · ${nc} jogos comparáveis</h3>${tabela(["","1X2","Golos"],[["Modelo puro",b3(bM),b3(gM)],["Final (α = "+f2(CFG.alfa)+")",b3(bC),b3(gC)],["Mercado de abertura",b3(bK),"–"],["Mercado de fecho",b3(bF),b3(gF)]])}</div>
+      <div class="card"><h3>Log-loss (menor = melhor) · ${n} jogos</h3>${tabela(["","1X2","Golos"],[["Modelo puro",f4(lM,n),f4(gM,ng)],["Final (modelo + mercado)",f4(lF,n),f4(gF,ng)],["Mercado de abertura",f4(lK,n),"–"],["Mercado de fecho",f4(lC,n),f4(gC,ng)],["Ganho final vs abertura",n?`${f2(ganho,4)} ± ${f2(2*mse,4)}`:"–","–"]])}</div>
       <div class="card"><h3>Calibração — vitória da casa (modelo puro)</h3>${tabela(["Faixa","Jogos","Prevista","Real"],cal.map((c,i)=>[`${i*10}–${i*10+10}%`,c[0],c[0]?pct(c[1]/c[0],0):"–",c[0]?pct(c[2]/c[0],0):"–"]).filter(r=>r[1]>0))}</div>
     </div>
     <div class="card chart" style="margin-top:12px">${linhaSVG(acc,"u")}</div>
-    <p class="note">Cada jogo é previsto só com jogos anteriores à sua data (sem fuga de informação). Aposta simulada: 1 unidade na melhor seleção com EV ≥ ${sgn(CFG.evMin)} e odd ≤ ${f2(CFG.oddMax)}, à odd média de abertura. Usa os parâmetros atuais das definições — alterar parâmetros até o backtest ficar bonito é sobreajuste.</p>`;
+    <p class="note">Previsões walk-forward: cada jogo usa só jogos anteriores, e ρ e α são estimados só com épocas anteriores (fora da amostra). A: 1 unidade na melhor seleção com EV do modelo ≥ ${sgn(CFG.evMin)} à odd média. B: 1 unidade quando a melhor odd do mercado supera o preço justo da Pinnacle em ≥ ${sgn(CFG.evPreco)} — mede o valor de procurar o melhor preço, não a qualidade do modelo. Em ambos, odd ≤ ${f2(CFG.oddMax)}.</p>
+    <div class="sec">Validação por liga <span style="font-weight:400;font-size:13px;color:var(--txt2)">(critérios fixos do robô)</span></div>
+    <div class="card" style="padding:8px 10px;overflow-x:auto">${tabela(["Liga","Jogos","Ganho log-loss ±2EP","A: ROI / CLV (n)","B: ROI / CLV (n)","Validada"],vr)}</div>
+    <p class="note">Uma liga é validada quando o modelo combinado bate o mercado de abertura por mais de 2 erros-padrão, com CLV positivo e pelo menos ${P.validacao?P.validacao.apostas_min:80} apostas simuladas. Só aí o sinal “Valor do modelo” é ativado; nas restantes, os sinais do modelo ficam em “A observar”. Parâmetros atuais: ρ = ${f2(P.rho)}, α 1X2 = ${f2(P.alfa1x2)}, α golos = ${f2(P.alfaGolos)}.</p>`;
+  $("#btS").onchange=e=>{S.btF.est=e.target.value;rBT()};
   $("#btL").onchange=e=>{S.btF.liga=e.target.value;rBT()};
   $("#btE").onchange=e=>{S.btF.ep=e.target.value;rBT()};
 }
 
 /* ============================================================ DEFINIÇÕES */
 const CAMPOS=[
-  ["banca","Banca de referência (€)","Base para o stake sugerido.",1,"eur"],
-  ["fracKelly","Fração de Kelly","¼ de Kelly é a prática prudente com erro de estimação.",1,"num"],
-  ["stakeMax","Stake máximo por aposta","Em % da banca.",100,"pct"],
-  ["alfa","Peso do modelo (α)","P final = α × modelo + (1 − α) × mercado. 1 = só modelo.",1,"num"],
-  ["rho","ρ de Dixon-Coles","Corrige 0-0 e 1-1. Típico entre −0,15 e −0,05; 0 = Poisson puro.",1,"num"],
-  ["evMin","EV mínimo — “A observar”","Em %.",100,"pct"],
-  ["evForte","EV mínimo — “Interessante”","Em %.",100,"pct"],
-  ["oddMax","Odd máxima","Odds altas amplificam o erro de probabilidade.",1,"num"],
-  ["minJogos","Jogos mínimos de histórico","Abaixo disto: “Não validado”.",1,"num"],
-  ["divMax","Divergência máx. modelo vs. mercado","Em p.p.; acima disto: “Rever”.",100,"pct"],
-  ["erro","Erro de stress por perna","Em p.p., usado no Tapete.",100,"pct"],
+  ["banca","Banca de referência (€)","Base para o stake sugerido.",1],
+  ["fracKelly","Fração de Kelly","¼ de Kelly é a prática prudente com erro de estimação.",1],
+  ["stakeMax","Stake máximo por aposta","Em % da banca.",100],
+  ["evPreco","EV mínimo — valor de preço","Em %, face ao preço justo (Pinnacle/Betfair).",100],
+  ["evMin","EV mínimo — sinal do modelo","Em %. Abaixo: “Sem vantagem”.",100],
+  ["evForte","EV mínimo — valor do modelo","Em %. Só em ligas validadas.",100],
+  ["oddMax","Odd máxima","Odds altas amplificam o erro de probabilidade.",1],
+  ["minJogos","Jogos mínimos de histórico","Abaixo disto: “Não validado”.",1],
+  ["divMax","Divergência máx. modelo vs. mercado","Em p.p.; acima disto: “Rever”.",100],
+  ["erro","Erro de stress por perna","Em p.p., usado no Tapete.",100],
 ];
 function abrirCfg(){
-  const c=S.dados&&S.dados.config;
   $("#mbox").innerHTML=`<h3>Definições</h3>
    ${CAMPOS.map(([k,l,h,m])=>`<div class="field"><label for="c_${k}">${l}<small>${h}</small></label><input class="inp num" inputmode="decimal" id="c_${k}" value="${fi(CFG[k]*m,m===100?1:2)}"></div>`).join("")}
    <div class="field"><label for="c_ref">Odds de referência<small>Usadas quando não introduzes a tua odd.</small></label><select class="inp" id="c_ref">${[["avg","Média de mercado"],["b365","Bet365"],["max","Máxima de mercado"]].map(([v,t])=>`<option value="${v}" ${CFG.ref===v?"selected":""}>${t}</option>`).join("")}</select></div>
    <div class="field" style="grid-template-columns:1fr"><label>Mercados considerados</label><div style="display:flex;gap:12px;flex-wrap:wrap">${MKF.map((m,i)=>`<label style="font-size:13.5px"><input type="checkbox" id="c_mk${i}" ${CFG.mk[i]?"checked":""}> ${m}</label>`).join("")}</div></div>
-   <p class="note">Meia-vida (${c?c.meia_vida_dias:"–"} dias) e regularização K (${c?c.regularizacao_k:"–"}) são do robô: alteram-se no ficheiro config.json do repositório. As definições ficam guardadas neste browser.</p>
+   <p class="note">Estimados pelo robô fora da amostra: ρ = ${f2(par().rho)}, α 1X2 = ${f2(par().alfa1x2)}, α golos = ${f2(par().alfaGolos)} (peso do modelo face ao mercado). Meia-vida ${par().meiaVida??"–"} dias, k = ${par().k??"–"}, peso dos golos vs remates ${f2(par().pesoGolos)}: alteram-se no config.json do repositório. As definições ficam guardadas neste browser.</p>
    <div class="err" id="cErr"></div>
    <div class="mact"><button class="btn ghost" id="cDef">Repor valores iniciais</button><span style="flex:1"></span><button class="btn" data-close>Cancelar</button><button class="btn pri" id="cOk">Guardar</button></div>`;
   $("#cDef").onclick=()=>{CFG=JSON.parse(JSON.stringify(DEF));save();fecharModal();tudo();toast("Valores iniciais repostos")};
   $("#cOk").onclick=()=>{
     const n={};
     for(const [k,l,,m] of CAMPOS){const v=pnum($("#c_"+k).value); if(v===null){$("#cErr").textContent="Valor inválido em: "+l;return} n[k]=v/m}
-    if(n.alfa<0||n.alfa>1){$("#cErr").textContent="α tem de estar entre 0 e 1.";return}
-    if(n.rho<-0.3||n.rho>0.3){$("#cErr").textContent="ρ fora do intervalo razoável (−0,3 a 0,3).";return}
     if(n.banca<=0||n.fracKelly<0||n.fracKelly>1){$("#cErr").textContent="Banca tem de ser positiva e a fração de Kelly entre 0 e 1.";return}
     n.ref=$("#c_ref").value; n.mk=MKF.map((_,i)=>$("#c_mk"+i).checked);
     if(!n.mk.some(Boolean)){$("#cErr").textContent="Escolhe pelo menos um mercado.";return}
