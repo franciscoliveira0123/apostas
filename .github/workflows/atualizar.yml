@@ -1,0 +1,48 @@
+name: Atualizar dados e publicar
+
+on:
+  schedule:
+    # Horas em UTC (Portugal no inverno = UTC; no verão = UTC+1)
+    - cron: "17 6 * * *"     # todos os dias de manhã
+    - cron: "17 17 * * *"    # todos os dias ao fim da tarde
+    - cron: "47 10 * * 5,6"  # reforço sexta e sábado
+  workflow_dispatch:          # botão "Run workflow" (atualização manual)
+  push:
+    branches: [main]          # republica quando alteras a página ou o config.json
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  construir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Descarregar dados e calcular
+        run: |
+          mkdir -p _site
+          python atualizar.py _site
+          cp index.html _site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  publicar:
+    needs: construir
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
